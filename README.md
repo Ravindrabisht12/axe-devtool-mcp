@@ -18,6 +18,7 @@ Both tools accept:
 - `excludeRules` — axe rule ids to skip
 - `detail` — `"full"` (default; lists offending elements + fixes) or `"summary"` (rule + counts only)
 - `maxNodes` — max offending elements to list per rule when `detail="full"` (default `5`)
+- `includeIncomplete` — also report axe **"incomplete"** items: checks that need manual review (e.g. color-contrast over background images, `aria-hidden` focus). Off by default; set `true` to surface likely issues that automated rules could not confirm.
 
 `scan_url` also accepts `include` (CSS selector to scope the scan) and `timeoutMs` (navigation timeout).
 
@@ -45,9 +46,15 @@ Then in Claude Code:
 
 > Scan https://example.com for accessibility issues.
 
-## Use with Claude Desktop / Cursor
+## Use with other MCP clients
 
-Add to your MCP config (`claude_desktop_config.json` or Cursor's `mcp.json`):
+This is a standard stdio MCP server, so it works in any MCP-capable client. Once published to npm, every client uses the same `npx` invocation; before publishing, replace it with `node /absolute/path/to/axe-devtool-mcp/dist/index.js`.
+
+### Claude Desktop
+
+Edit `claude_desktop_config.json`
+(macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`,
+Windows: `%APPDATA%\Claude\claude_desktop_config.json`), then restart the app:
 
 ```json
 {
@@ -60,11 +67,44 @@ Add to your MCP config (`claude_desktop_config.json` or Cursor's `mcp.json`):
 }
 ```
 
+### VS Code / GitHub Copilot (Agent mode)
+
+Add a `.vscode/mcp.json` in your workspace (note the `servers` key), then enable it from the Copilot Chat "Tools" picker in Agent mode:
+
+```json
+{
+  "servers": {
+    "axe-devtools": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "axe-devtools-mcp"]
+    }
+  }
+}
+```
+
+### Cursor
+
+Add to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project):
+
+```json
+{
+  "mcpServers": {
+    "axe-devtools": {
+      "command": "npx",
+      "args": ["-y", "axe-devtools-mcp"]
+    }
+  }
+}
+```
+
+> Tip: some clients (e.g. background/headless runners) don't run npm lifecycle scripts, so the Chromium auto-install won't fire. If a scan fails to launch a browser, run `npx playwright install chromium` once on that machine.
+
 ## Run from source
 
 ```bash
-git clone https://github.com/<you>/axe-devtools-mcp.git
-cd axe-devtools-mcp
+git clone https://github.com/Ravindrabisht12/axe-devtool-mcp.git
+cd axe-devtool-mcp
 npm install
 npm run build
 node dist/index.js   # speaks MCP over stdio

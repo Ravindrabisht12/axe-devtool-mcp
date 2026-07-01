@@ -95,13 +95,47 @@ function sortByImpact(a: AxeResult, b: AxeResult): number {
 export interface FormatOptions {
   detail: "summary" | "full";
   maxNodes: number;
+  /** Also report axe "incomplete" items — checks that need manual review. */
+  includeIncomplete?: boolean;
+}
+
+/** Render one axe result (violation or incomplete item) into markdown lines. */
+function renderRule(
+  r: AxeResult,
+  { detail, maxNodes }: Pick<FormatOptions, "detail" | "maxNodes">,
+  lines: string[]
+): void {
+  lines.push(`## [${(r.impact ?? "n/a").toUpperCase()}] ${r.id} — ${r.help}`);
+  lines.push(r.description);
+  lines.push(`Affected elements: ${r.nodes.length} · Learn more: ${r.helpUrl}`);
+  if (r.tags.length > 0) lines.push(`Tags: ${r.tags.join(", ")}`);
+
+  if (detail === "full") {
+    const shown = r.nodes.slice(0, maxNodes);
+    for (const node of shown) {
+      lines.push("");
+      lines.push("```html");
+      lines.push(node.html);
+      lines.push("```");
+      lines.push(`- Selector: \`${node.target.join(" ")}\``);
+      const summary = node.failureSummary;
+      if (summary) {
+        lines.push(`- Fix: ${summary.replace(/\n/g, "\n  ")}`);
+      }
+    }
+    if (r.nodes.length > shown.length) {
+      lines.push("");
+      lines.push(`…and ${r.nodes.length - shown.length} more element(s).`);
+    }
+  }
+  lines.push("");
 }
 
 /** Render axe results into a compact, LLM-friendly markdown report. */
 export function formatResults(
   results: AxeResults,
   target: string,
-  { detail, maxNodes }: FormatOptions
+  { detail, maxNodes, includeIncomplete = false }: FormatOptions
 ): string {
   const violations = [...results.violations].sort(sortByImpact);
   const counts: Record<string, number> = { critical: 0, serious: 0, moderate: 0, minor: 0 };
@@ -124,41 +158,31 @@ export function formatResults(
   );
   lines.push("");
 
+  const incomplete = includeIncomplete ? [...results.incomplete].sort(sortByImpact) : [];
+
   if (violations.length === 0) {
     lines.push("✅ No violations found for the selected rules/tags.");
-    if (results.incomplete.length > 0) {
+    if (results.incomplete.length > 0 && !includeIncomplete) {
       lines.push("");
       lines.push(
-        `⚠️ ${results.incomplete.length} item(s) need manual review (see \`incomplete\` in full detail).`
+        `⚠️ ${results.incomplete.length} item(s) need manual review. Re-run with includeIncomplete=true to see them.`
       );
     }
-    return lines.join("\n");
   }
 
-  for (const v of violations) {
-    lines.push(`## [${(v.impact ?? "n/a").toUpperCase()}] ${v.id} — ${v.help}`);
-    lines.push(v.description);
-    lines.push(`Affected elements: ${v.nodes.length} · Learn more: ${v.helpUrl}`);
-    if (v.tags.length > 0) lines.push(`Tags: ${v.tags.join(", ")}`);
-
-    if (detail === "full") {
-      const shown = v.nodes.slice(0, maxNodes);
-      for (const node of shown) {
-        lines.push("");
-        lines.push("```html");
-        lines.push(node.html);
-        lines.push("```");
-        lines.push(`- Selector: \`${node.target.join(" ")}\``);
-        if (node.failureSummary) {
-          lines.push(`- Fix: ${node.failureSummary.replace(/\n/g, "\n  ")}`);
-        }
-      }
-      if (v.nodes.length > shown.length) {
-        lines.push("");
-        lines.push(`…and ${v.nodes.length - shown.length} more element(s).`);
-      }
-    }
+  if (violations.length > 0) {
+    lines.push("## Violations");
     lines.push("");
+    for (const v of violations) renderRule(v, { detail, maxNodes }, lines);
+  }
+
+  if (includeIncomplete && incomplete.length > 0) {
+    lines.push("# Needs manual review (incomplete)");
+    lines.push(
+      "axe could not decide these automatically — a human must confirm. Often true positives."
+    );
+    lines.push("");
+    for (const i of incomplete) renderRule(i, { detail, maxNodes }, lines);
   }
 
   return lines.join("\n").trim();

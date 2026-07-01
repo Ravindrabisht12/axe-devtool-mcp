@@ -1,6 +1,6 @@
 {
   "name": "axe-devtools-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server that runs axe-core accessibility scans (via Playwright) on URLs and HTML, for use with Claude Code and other MCP clients.",
   "type": "module",
   "bin": {

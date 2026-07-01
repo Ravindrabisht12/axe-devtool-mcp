@@ -12,7 +12,7 @@ import {
 
 const server = new McpServer({
   name: "axe-devtools-mcp",
-  version: "0.1.0",
+  version: "0.2.0",
 });
 
 const commonShape = {
@@ -36,6 +36,13 @@ const commonShape = {
     .default("full")
     .describe(
       '"summary" lists violated rules and counts only; "full" (default) also lists offending elements and fix guidance.'
+    ),
+  includeIncomplete: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      'Also report axe "incomplete" items — checks that need manual review (e.g. color-contrast over images, aria-hidden focus). Off by default; set true to surface likely issues automated rules could not confirm.'
     ),
   maxNodes: z
     .number()
@@ -83,12 +90,15 @@ server.registerTool(
       ...commonShape,
     },
   },
-  async ({ url, detail, maxNodes, ...rest }) => {
+  async ({ url, detail, maxNodes, includeIncomplete, ...rest }) => {
     try {
       const results = await scanUrl(url, toScanOptions(rest));
       return {
         content: [
-          { type: "text", text: formatResults(results, url, { detail, maxNodes }) },
+          {
+            type: "text",
+            text: formatResults(results, url, { detail, maxNodes, includeIncomplete }),
+          },
         ],
       };
     } catch (err) {
@@ -111,14 +121,18 @@ server.registerTool(
       ...commonShape,
     },
   },
-  async ({ html, detail, maxNodes, ...rest }) => {
+  async ({ html, detail, maxNodes, includeIncomplete, ...rest }) => {
     try {
       const results = await scanHtml(html, toScanOptions(rest));
       return {
         content: [
           {
             type: "text",
-            text: formatResults(results, "HTML snippet", { detail, maxNodes }),
+            text: formatResults(results, "HTML snippet", {
+              detail,
+              maxNodes,
+              includeIncomplete,
+            }),
           },
         ],
       };
