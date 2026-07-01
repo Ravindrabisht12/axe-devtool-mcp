@@ -1,6 +1,8 @@
 import { chromium, type Browser, type Page } from "playwright";
 import { AxeBuilder } from "@axe-core/playwright";
 import type { AxeResults, Result as AxeResult, ImpactValue } from "axe-core";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 
 export interface ScanOptions {
   /** WCAG / rule tags to run, e.g. ["wcag2a", "wcag2aa", "wcag21aa", "best-practice"]. */
@@ -77,6 +79,101 @@ export async function scanHtml(html: string, opts: ScanOptions = {}): Promise<Ax
   } finally {
     await context.close().catch(() => {});
   }
+}
+
+/** Scan a local HTML file on disk (loaded via file:// so linked CSS/assets resolve). */
+export async function scanFile(filePath: string, opts: ScanOptions = {}): Promise<AxeResults> {
+  const abs = path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
+  const fileUrl = pathToFileURL(abs).toString();
+  const browser = await getBrowser();
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    await page.goto(fileUrl, { waitUntil: "load", timeout: opts.timeoutMs ?? 30_000 });
+    return await buildAxe(page, opts).analyze();
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
+export interface CrawlOptions extends ScanOptions {
+  /** Maximum number of pages to scan (default 5). */
+  maxPages?: number;
+  /** Only follow links on the same origin as the start URL (default true). */
+  sameOriginOnly?: boolean;
+}
+
+export interface PageScan {
+  url: string;
+  results?: AxeResults;
+  error?: string;
+}
+
+/** Strip the hash from a URL for dedup; return null for non-http(s) or unparseable URLs. */
+function normalizeUrl(u: string): string | null {
+  try {
+    const x = new URL(u);
+    if (x.protocol !== "http:" && x.protocol !== "https:") return null;
+    x.hash = "";
+    return x.toString();
+  } catch {
+    return null;
+  }
+}
+
+const NON_PAGE_EXT =
+  /\.(pdf|zip|png|jpe?g|gif|svg|webp|ico|css|js|json|xml|mp4|mp3|woff2?|ttf|eot|dmg|exe)(\?|$)/i;
+
+/**
+ * Crawl a running site starting from `startUrl`, breadth-first, following
+ * same-origin links, and run an axe-core audit on each page (up to maxPages).
+ */
+export async function scanSite(startUrl: string, opts: CrawlOptions = {}): Promise<PageScan[]> {
+  const start = normalizeUrl(startUrl);
+  if (!start) throw new Error(`Invalid start URL: ${startUrl}`);
+  const origin = new URL(start).origin;
+  const maxPages = Math.max(1, opts.maxPages ?? 5);
+  const sameOriginOnly = opts.sameOriginOnly !== false;
+
+  const queue: string[] = [start];
+  const seen = new Set<string>(queue);
+  const out: PageScan[] = [];
+
+  const browser = await getBrowser();
+  const context = await browser.newContext();
+  try {
+    while (queue.length > 0 && out.length < maxPages) {
+      const url = queue.shift()!;
+      const page = await context.newPage();
+      try {
+        await page.goto(url, { waitUntil: "load", timeout: opts.timeoutMs ?? 30_000 });
+        await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
+        const results = await buildAxe(page, opts).analyze();
+        out.push({ url, results });
+
+        // Only bother collecting more links if we still have budget.
+        if (out.length + queue.length < maxPages) {
+          const hrefs = await page
+            .$$eval("a[href]", (as) => as.map((a) => (a as HTMLAnchorElement).href))
+            .catch(() => [] as string[]);
+          for (const href of hrefs) {
+            const n = normalizeUrl(href);
+            if (!n || seen.has(n) || NON_PAGE_EXT.test(n)) continue;
+            if (sameOriginOnly && new URL(n).origin !== origin) continue;
+            seen.add(n);
+            queue.push(n);
+          }
+        }
+      } catch (err) {
+        out.push({ url, error: (err as Error).message });
+      } finally {
+        await page.close().catch(() => {});
+      }
+    }
+  } finally {
+    await context.close().catch(() => {});
+  }
+  return out;
 }
 
 const IMPACT_ORDER: Record<string, number> = {
@@ -183,6 +280,91 @@ export function formatResults(
     );
     lines.push("");
     for (const i of incomplete) renderRule(i, { detail, maxNodes }, lines);
+  }
+
+  return lines.join("\n").trim();
+}
+
+/** Render a multi-page crawl into an aggregated site report. */
+export function formatSiteResults(
+  pages: PageScan[],
+  startUrl: string,
+  { detail, maxNodes, includeIncomplete = false }: FormatOptions
+): string {
+  const scanned = pages.filter((p) => p.results);
+  const failed = pages.filter((p) => p.error);
+
+  // Aggregate each violated rule across all pages.
+  interface Agg {
+    id: string;
+    impact: string;
+    help: string;
+    totalNodes: number;
+    pages: Set<string>;
+  }
+  const agg = new Map<string, Agg>();
+  let totalViolations = 0;
+  for (const p of scanned) {
+    for (const v of p.results!.violations) {
+      totalViolations += v.nodes.length;
+      const existing = agg.get(v.id);
+      if (existing) {
+        existing.totalNodes += v.nodes.length;
+        existing.pages.add(p.url);
+      } else {
+        agg.set(v.id, {
+          id: v.id,
+          impact: v.impact ?? "n/a",
+          help: v.help,
+          totalNodes: v.nodes.length,
+          pages: new Set([p.url]),
+        });
+      }
+    }
+  }
+  const ranked = [...agg.values()].sort(
+    (a, b) => (IMPACT_ORDER[a.impact] ?? 4) - (IMPACT_ORDER[b.impact] ?? 4)
+  );
+
+  const lines: string[] = [];
+  lines.push(`# Site accessibility scan: ${startUrl}`);
+  lines.push("");
+  lines.push(
+    `Crawled **${scanned.length} page(s)**` +
+      (failed.length ? ` (${failed.length} failed to load)` : "") +
+      ` · **${totalViolations} total violation instance(s)** across ${ranked.length} distinct rule(s).`
+  );
+  lines.push("");
+
+  if (ranked.length > 0) {
+    lines.push("## Violations across the site (most severe first)");
+    lines.push("");
+    lines.push("| Rule | Impact | Instances | Pages affected |");
+    lines.push("| --- | --- | --- | --- |");
+    for (const r of ranked) {
+      lines.push(
+        `| ${r.id} — ${r.help} | ${r.impact} | ${r.totalNodes} | ${r.pages.size} |`
+      );
+    }
+    lines.push("");
+  } else {
+    lines.push("✅ No violations found on any crawled page for the selected rules/tags.");
+    lines.push("");
+  }
+
+  if (failed.length > 0) {
+    lines.push("## Pages that failed to load");
+    for (const f of failed) lines.push(`- ${f.url} — ${f.error}`);
+    lines.push("");
+  }
+
+  // Per-page detail reuses the single-page formatter.
+  lines.push("## Per-page detail");
+  lines.push("");
+  for (const p of scanned) {
+    lines.push("---");
+    lines.push(formatResults(p.results!, p.url, { detail, maxNodes, includeIncomplete }));
+    lines.push("");
   }
 
   return lines.join("\n").trim();

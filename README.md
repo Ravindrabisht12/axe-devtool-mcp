@@ -10,6 +10,8 @@ It renders pages in headless Chromium (via Playwright), injects axe-core, and re
 | --- | --- |
 | `scan_url` | Load a URL (live site or local dev server) in headless Chromium and run an axe-core audit. |
 | `scan_html` | Run an axe-core audit against a raw HTML string. |
+| `scan_file` | Scan a local `.html` file on disk (loaded via `file://` so linked CSS/assets resolve). Good for static-site build output. |
+| `scan_site` | Crawl a running site breadth-first from a start URL, following same-origin links, and audit every page (up to `maxPages`). Returns an aggregated report plus per-page detail. |
 
 Both tools accept:
 
@@ -20,7 +22,15 @@ Both tools accept:
 - `maxNodes` — max offending elements to list per rule when `detail="full"` (default `5`)
 - `includeIncomplete` — also report axe **"incomplete"** items: checks that need manual review (e.g. color-contrast over background images, `aria-hidden` focus). Off by default; set `true` to surface likely issues that automated rules could not confirm.
 
-`scan_url` also accepts `include` (CSS selector to scope the scan) and `timeoutMs` (navigation timeout).
+`scan_url` and `scan_file` also accept `include` (CSS selector to scope the scan) and `timeoutMs`. `scan_file` takes a `path` (absolute, or relative to the server's working directory). `scan_site` additionally takes `maxPages` (default `5`, max `50`) and `sameOriginOnly` (default `true`).
+
+### Scanning your own site / codebase
+
+axe-core is a **runtime** engine — it audits the rendered DOM, not your source files. To audit code you're building:
+
+- **Running app (best):** start your dev server (`npm run dev`), then `scan_url http://localhost:3000/...`, or `scan_site http://localhost:3000` to crawl every route in one call. This tests exactly what users get after your framework renders.
+- **Static build output:** `scan_file ./dist/index.html`. Note single-page-app builds are usually empty shells hydrated by JS, so scan the running server instead.
+- **Source-level linting** (a different, complementary tool): `eslint-plugin-jsx-a11y`, `eslint-plugin-vuejs-accessibility`, etc.
 
 ## Requirements
 

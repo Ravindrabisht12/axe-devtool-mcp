@@ -5,14 +5,17 @@ import { z } from "zod";
 import {
   scanUrl,
   scanHtml,
+  scanFile,
+  scanSite,
   formatResults,
+  formatSiteResults,
   closeBrowser,
   type ScanOptions,
 } from "./scanner.js";
 
 const server = new McpServer({
   name: "axe-devtools-mcp",
-  version: "0.2.0",
+  version: "0.3.0",
 });
 
 const commonShape = {
@@ -133,6 +136,99 @@ server.registerTool(
               maxNodes,
               includeIncomplete,
             }),
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Scan failed: ${(err as Error).message}` }],
+      };
+    }
+  }
+);
+
+server.registerTool(
+  "scan_file",
+  {
+    title: "Scan a local HTML file for accessibility issues",
+    description:
+      "Runs an axe-core accessibility audit against a local .html file on disk (loaded via file:// so linked CSS/assets resolve). Use for static-site build output. Note: single-page-app build files are usually empty shells hydrated by JS — scan the running dev server with scan_url instead.",
+    inputSchema: {
+      path: z
+        .string()
+        .min(1)
+        .describe("Path to a local .html file (absolute, or relative to the server's cwd)."),
+      include: z
+        .string()
+        .optional()
+        .describe("Optional CSS selector to scope the scan to one region of the page."),
+      timeoutMs: z.number().int().positive().optional().describe("Load timeout in ms (default 30000)."),
+      ...commonShape,
+    },
+  },
+  async ({ path: filePath, detail, maxNodes, includeIncomplete, ...rest }) => {
+    try {
+      const results = await scanFile(filePath, toScanOptions(rest));
+      return {
+        content: [
+          {
+            type: "text",
+            text: formatResults(results, filePath, { detail, maxNodes, includeIncomplete }),
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Scan failed: ${(err as Error).message}` }],
+      };
+    }
+  }
+);
+
+server.registerTool(
+  "scan_site",
+  {
+    title: "Crawl a running site and scan multiple pages",
+    description:
+      "Crawls a running site breadth-first starting from a URL, following same-origin links, and runs an axe-core audit on each page (up to maxPages). Returns an aggregated report plus per-page detail. Use to audit a whole site/app in one call instead of scanning routes one by one.",
+    inputSchema: {
+      url: z.string().url().describe("The start URL to crawl from (http:// or https://)."),
+      maxPages: z
+        .number()
+        .int()
+        .positive()
+        .max(50)
+        .optional()
+        .default(5)
+        .describe("Maximum number of pages to crawl and scan (default 5, max 50)."),
+      sameOriginOnly: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe("Only follow links on the same origin as the start URL (default true)."),
+      timeoutMs: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Per-page navigation timeout in ms (default 30000)."),
+      ...commonShape,
+    },
+  },
+  async ({ url, maxPages, sameOriginOnly, detail, maxNodes, includeIncomplete, ...rest }) => {
+    try {
+      const pages = await scanSite(url, {
+        ...toScanOptions(rest),
+        maxPages,
+        sameOriginOnly,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: formatSiteResults(pages, url, { detail, maxNodes, includeIncomplete }),
           },
         ],
       };
