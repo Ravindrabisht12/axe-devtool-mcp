@@ -1,0 +1,46 @@
+{
+  "name": "axe-devtools-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that runs axe-core accessibility scans (via Playwright) on URLs and HTML, for use with Claude Code and other MCP clients.",
+  "type": "module",
+  "bin": {
+    "axe-devtools-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node dist/index.js",
+    "prepare": "npm run build",
+    "postinstall": "node -e \"try{require('child_process').execSync('npx playwright install chromium',{stdio:'inherit'})}catch(e){console.error('Playwright browser install skipped; run: npx playwright install chromium')}\""
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "axe-core",
+    "accessibility",
+    "a11y",
+    "wcag",
+    "claude",
+    "claude-code",
+    "playwright"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@axe-core/playwright": "^4.10.1",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "axe-core": "^4.10.2",
+    "playwright": "^1.49.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
